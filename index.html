@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>CRUCIBLE — BTC / ETH / SOL liquidations</title>
+<title>CRUCIBLE — BTC / ETH / SOL / LUNC liquidations</title>
 <style>
 :root{
   --bg:#080b11; --panel:#0f141d; --panel2:#141b26; --line:#1d2734;
@@ -362,9 +362,9 @@ input[type=number]{font-family:inherit;font-size:12px;background:var(--panel2);
 </script>
 <script>"use strict";
 /* =========================================================================
-   CRUCIBLE — cross-exchange perp liquidation monitor, BTC / ETH / SOL
+   CRUCIBLE — cross-exchange perp liquidation monitor, BTC / ETH / SOL / LUNC
 
-   One socket per exchange carries all three symbols; prints are routed to
+   One socket per exchange carries all four symbols; prints are routed to
    per-symbol state on arrival. Nine sockets would be the naive shape and
    would hit connection limits for nothing.
 
@@ -382,6 +382,13 @@ const SYMS = [
     bitget: "ETHUSDT", ctVal: 0.1, dp: 2, mmr: 0.0075 },
   { key: "SOL", bybit: "SOLUSDT", binance: "solusdt", okx: "SOL-USDT-SWAP",
     bitget: "SOLUSDT", ctVal: 1, dp: 3, mmr: 0.01 },
+  /* ctVal is a fallback only (overwritten live from OKX, see loadCtVal) —
+     LUNC's real per-contract size isn't known ahead of that fetch. mmr is a
+     best-effort estimate (higher than SOL's, reflecting LUNC's thinner
+     liquidity/higher volatility) since exchanges don't publish it over a
+     public, unauthenticated endpoint the way ctVal is. */
+  { key: "LUNC", bybit: "LUNCUSDT", binance: "luncusdt", okx: "LUNC-USDT-SWAP",
+    bitget: "LUNCUSDT", ctVal: 1000, dp: 7, mmr: 0.015 },
 ];
 const BY = { bybit: {}, binance: {}, okx: {}, bitget: {} };
 for (const s of SYMS) {
