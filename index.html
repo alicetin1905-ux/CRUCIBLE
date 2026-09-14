@@ -865,14 +865,17 @@ function connect(key) {
   let ws;
   try { ws = new WebSocket(def.url); }
   catch (e) { c.state = "err"; c.err = "blocked"; paintRail(); return retry(key); }
-  let pinger = 0;
+  let pinger = 0, staleWatch = 0, staleKicked = false, gotAnyMsgAt = 0;
+  const openedAt = Date.now();
   ws.onopen = () => {
     c.state = "on"; c.tries = 0; c.err = null; c.everOpened = true; c.blocked = false;
+    gotAnyMsgAt = Date.now();
     paintRail();
     if (def.sub) ws.send(def.sub());
     if (def.ping) pinger = setInterval(() => { if (ws.readyState === 1) ws.send(def.ping()); }, def.pingMs);
   };
   ws.onmessage = ev => {
+    gotAnyMsgAt = Date.now();
     if (typeof ev.data === "string" && (ev.data === "pong" || ev.data === "ping")) return;
     let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
     if (m && (m.event === "error" || m.success === false)) {
@@ -885,7 +888,27 @@ function connect(key) {
     if (rows.length) { c.count += rows.length; c.last = Date.now(); rows.forEach(ingest); paintRail(); }
   };
   ws.onerror = () => { c.err = "socket error"; };
-  ws.onclose = () => { clearInterval(pinger); c.state = "err"; paintRail(); retry(key); };
+  ws.onclose = () => { clearInterval(pinger); clearInterval(staleWatch); c.state = "err"; paintRail(); retry(key); };
+  /* Watchdog: the socket can finish its handshake and sit there looking
+     "on" while never delivering anything afterwards — found and fixed on
+     BTCLiveBoard/ATLAS, same shape here (this is what a stuck-at-"0
+     prints" exchange panel actually is: onclose never fires because the
+     socket never closes on its own, so nothing was ever going to retry).
+     Bybit/OKX/Bitget have an app-level ping, so even total silence back
+     (no pong) within ~2.5 ping intervals means something's wrong. Binance
+     sends no ping at all and real liquidations can legitimately be rare,
+     so it gets a much longer grace window — long silence there is normal,
+     not a fault, but it still shouldn't be allowed to go dead forever. */
+  const maxSilence = def.ping ? def.pingMs * 2.5 : 300000;
+  staleWatch = setInterval(() => {
+    if (ws.readyState !== 1 || staleKicked) return;
+    const last = gotAnyMsgAt || openedAt;
+    if (Date.now() - last > maxSilence) {
+      staleKicked = true;
+      logRaw(key + ": no messages for " + Math.round((Date.now() - last) / 1000) + "s on an open socket — forcing reconnect");
+      try { ws.close(); } catch (e) {}
+    }
+  }, 10000);
 }
 function retry(key) {
   const c = conns[key];
@@ -1122,14 +1145,17 @@ function drawOverlay() {
 /* ---------- ticker socket (price, OI, funding for all symbols) ----------- */
 function startTicker() {
   const ws = new WebSocket("wss://stream.bybit.com/v5/public/linear");
-  let pinger;
+  let pinger, staleWatch, staleKicked = false, gotAnyMsgAt = 0;
+  const openedAt = Date.now();
   ws.onopen = () => {
     const args = [];
     for (const s of SYMS) args.push("tickers." + s.bybit, "kline.15." + s.bybit, "kline.1." + s.bybit);
     ws.send(JSON.stringify({ op: "subscribe", args }));
+    gotAnyMsgAt = Date.now();
     pinger = setInterval(() => ws.readyState === 1 && ws.send(JSON.stringify({ op: "ping" })), 20000);
   };
   ws.onmessage = ev => {
+    gotAnyMsgAt = Date.now();
     let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
     if (!m.topic) return;
     const parts = m.topic.split(".");
@@ -1159,7 +1185,20 @@ function startTicker() {
       }
     }
   };
-  ws.onclose = () => { clearInterval(pinger); setTimeout(startTicker, 4000); };
+  ws.onclose = () => { clearInterval(pinger); clearInterval(staleWatch); setTimeout(startTicker, 4000); };
+  /* Same watchdog as the liquidation feeds below: this socket can open and
+     ack the subscribe while never actually delivering a tick afterwards,
+     and onclose alone can't catch that since it never closes on its own
+     in that state. */
+  staleWatch = setInterval(() => {
+    if (ws.readyState !== 1 || staleKicked) return;
+    const last = gotAnyMsgAt || openedAt;
+    if (Date.now() - last > 50000) {
+      staleKicked = true;
+      logRaw("ticker: no messages for " + Math.round((Date.now() - last) / 1000) + "s on an open socket — forcing reconnect");
+      try { ws.close(); } catch (e) {}
+    }
+  }, 10000);
 }
 
 /* =========================================================================
