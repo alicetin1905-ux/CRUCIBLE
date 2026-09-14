@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>CRUCIBLE — BTC / ETH / SOL liquidations</title>
+<title>CRUCIBLE — BTC / ETH / SOL / XRP / BNB / DOGE liquidations</title>
 <style>
 :root{
   --bg:#080b11; --panel:#0f141d; --panel2:#141b26; --line:#1d2734;
@@ -380,9 +380,9 @@ input[type=number]{font-family:inherit;font-size:12px;background:var(--panel2);
 </script>
 <script>"use strict";
 /* =========================================================================
-   CRUCIBLE — cross-exchange perp liquidation monitor, BTC / ETH / SOL
+   CRUCIBLE — cross-exchange perp liquidation monitor, BTC / ETH / SOL / XRP / BNB / DOGE
 
-   One socket per exchange carries all three symbols; prints are routed to
+   One socket per exchange carries all six symbols; prints are routed to
    per-symbol state on arrival. Nine sockets would be the naive shape and
    would hit connection limits for nothing.
 
@@ -400,6 +400,18 @@ const SYMS = [
     bitget: "ETHUSDT", ctVal: 0.1, dp: 2, mmr: 0.0075 },
   { key: "SOL", bybit: "SOLUSDT", binance: "solusdt", okx: "SOL-USDT-SWAP",
     bitget: "SOLUSDT", ctVal: 1, dp: 3, mmr: 0.01 },
+  /* ctVal below is a fallback only (overwritten live from OKX, see
+     loadCtVal) — dp/decimals match the tick sizes already used for these
+     three on ATLAS/GoldenRatio/BTCLiveBoard. mmr is a best-effort estimate,
+     not a verified exchange figure (no public unauthenticated endpoint
+     publishes it) — these three are large-cap majors with deep liquidity,
+     so they sit at SOL's/ETH's existing tier. */
+  { key: "XRP", bybit: "XRPUSDT", binance: "xrpusdt", okx: "XRP-USDT-SWAP",
+    bitget: "XRPUSDT", ctVal: 100, dp: 4, mmr: 0.01 },
+  { key: "BNB", bybit: "BNBUSDT", binance: "bnbusdt", okx: "BNB-USDT-SWAP",
+    bitget: "BNBUSDT", ctVal: 0.01, dp: 2, mmr: 0.0075 },
+  { key: "DOGE", bybit: "DOGEUSDT", binance: "dogeusdt", okx: "DOGE-USDT-SWAP",
+    bitget: "DOGEUSDT", ctVal: 1000, dp: 5, mmr: 0.01 },
 ];
 const BY = { bybit: {}, binance: {}, okx: {}, bitget: {} };
 for (const s of SYMS) {
