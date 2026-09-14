@@ -65,26 +65,7 @@ input[type=number]{font-family:inherit;font-size:12px;background:var(--panel2);
 .tab.on .tk{color:var(--bright)}
 .tab .tp{display:block;font-size:15px;font-variant-numeric:tabular-nums;margin-top:1px}
 .tab .tl{display:block;font-size:10px;color:var(--dim);font-variant-numeric:tabular-nums}
-.tab.alert::after{content:"";position:absolute;top:7px;right:8px;width:6px;height:6px;
-  border-radius:50%;background:var(--warn);box-shadow:0 0 6px var(--warn)}
 
-.magrow{display:flex;gap:6px;align-items:center;flex-wrap:wrap;padding:8px 10px;
-  border-top:1px solid var(--line);font-size:11px;color:var(--dim)}
-.magrow label{display:flex;gap:5px;align-items:center}
-.magrow input{width:58px}
-.maghint{font-size:10.5px;line-height:1.5;padding:0 10px 9px;color:var(--dim)}
-.maghint:empty{padding:0}
-#toasts{position:fixed;left:10px;right:10px;bottom:calc(12px + env(safe-area-inset-bottom));
-  z-index:50;display:flex;flex-direction:column;gap:6px;pointer-events:none}
-.toast{pointer-events:auto;background:var(--panel2);border:1px solid var(--line);
-  border-left:3px solid var(--mid);border-radius:5px;padding:9px 12px;
-  box-shadow:0 6px 22px rgba(0,0,0,.55);animation:tin .28s ease-out}
-.toast.long{border-left-color:var(--long)} .toast.short{border-left-color:var(--short)}
-.toast.out{opacity:0;transform:translateY(6px);transition:all .38s}
-.toast .tt{font-size:12px;font-weight:600}
-.toast .tb{font-size:11px;color:var(--mid);margin-top:2px;font-variant-numeric:tabular-nums}
-@keyframes tin{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
-@media(min-width:721px){#toasts{left:auto;right:14px;width:340px}}
 .panel{background:var(--panel);border:1px solid var(--line);border-radius:5px;margin-bottom:9px}
 .phead{display:flex;align-items:center;gap:9px;padding:7px 11px;border-bottom:1px solid var(--line);
   font-size:11px;color:var(--mid);letter-spacing:.04em}
@@ -236,13 +217,6 @@ input[type=number]{font-family:inherit;font-size:12px;background:var(--panel2);
       <div class="v" id="mag-up" style="color:var(--short)">—</div>
       <div class="d" id="mag-up-d"></div></div>
   </div>
-  <div class="magrow">
-    <span class="chip" id="notifbtn">alerts off</span>
-    <span class="chip" id="soundbtn">sound on</span>
-    <label>on move &ge;
-      <input type="number" id="notifpct" value="0.4" step="0.1" min="0.05" max="10"> %</label>
-  </div>
-  <div class="maghint" id="notifhint"></div>
 </div>
 
 <div class="panel">
@@ -369,8 +343,6 @@ input[type=number]{font-family:inherit;font-size:12px;background:var(--panel2);
     </div>
   </div>
 </div>
-
-<div id="toasts"></div>
 
 <div class="foot">
   Bybit, Binance, OKX, Bitget, Gate.io and HTX publish liquidation streams; this reads all six directly
@@ -1269,32 +1241,6 @@ function startTicker() {
   }, 10000);
 }
 
-/* =========================================================================
-   CLUSTER ALERTS
-   The nearest cluster is an argmax over ~220 bins, so it flickers between
-   adjacent bins on every recompute even when nothing real happened. Alerts
-   therefore fire on a minimum move expressed as a percentage of price, not
-   on inequality, and never on a recompute the user caused by dragging a
-   slider. Small moves accumulate rather than reset, so a slow drift past
-   the threshold still alerts once.
-   ========================================================================= */
-const NOTIF = { on: false, minPct: 0.4, cooldown: 3e5, sound: true, sys: false };
-let audioCtx = null;
-
-function notifLoad() {
-  try {
-    const j = JSON.parse(lsGet("crucible.notif") || "{}");
-    if (typeof j.on === "boolean") NOTIF.on = j.on;
-    if (+j.minPct > 0) NOTIF.minPct = +j.minPct;
-    if (typeof j.sound === "boolean") NOTIF.sound = j.sound;
-  } catch (e) {}
-  NOTIF.sys = typeof Notification !== "undefined" && Notification.permission === "granted";
-}
-function notifSave() {
-  lsSet("crucible.notif", JSON.stringify(
-    { on: NOTIF.on, minPct: NOTIF.minPct, sound: NOTIF.sound }));
-}
-
 function nearestClusters(st) {
   if (!st.levels || !st.price) return { dn: null, up: null };
   const pick = (arr, k) => arr.length ? arr.reduce((a, b) => (b[k] > a[k] ? b : a)) : null;
@@ -1302,115 +1248,6 @@ function nearestClusters(st) {
     dn: pick(st.levels.bins.filter(b => b.price < st.price && b.long > 0), "long"),
     up: pick(st.levels.bins.filter(b => b.price > st.price && b.short > 0), "short"),
   };
-}
-
-function checkMagnets(st, silent) {
-  const n = nearestClusters(st), now = Date.now();
-  if (!st.mag) { st.mag = { dn: null, up: null }; st.magAt = { dn: 0, up: 0 }; }
-  for (const side of ["dn", "up"]) {
-    const bin = n[side];
-    if (!bin) continue;
-    const prev = st.mag[side];
-    if (prev == null) { st.mag[side] = bin.price; continue; }   // no baseline yet
-    const movePct = (Math.abs(bin.price - prev) / st.price) * 100;
-    if (movePct < NOTIF.minPct) continue;                        // bin jitter
-    st.mag[side] = bin.price;
-    if (silent || !NOTIF.on) continue;                           // user-driven recompute
-    if (now - (st.magAt[side] || 0) < NOTIF.cooldown) continue;
-    st.magAt[side] = now;
-    fireClusterAlert(st, side, prev, bin.price);
-  }
-}
-
-function fireClusterAlert(st, side, from, to) {
-  const dp = st.cfg.dp;
-  const dist = ((to - st.price) / st.price) * 100;
-  const nearer = Math.abs(to - st.price) < Math.abs(from - st.price);
-  const where = side === "dn" ? "cluster below" : "cluster above";
-  const title = st.cfg.key + " · " + where + " moved";
-  const body = fmtPx(from, dp) + " → " + fmtPx(to, dp) + "  ·  now " +
-    (dist >= 0 ? "+" : "") + dist.toFixed(2) + "% from price (" +
-    (nearer ? "nearer" : "further") + ")";
-  toast(title, body, side === "dn" ? "long" : "short");
-  if (NOTIF.sound) beep(side === "dn" ? 320 : 480);
-  if (NOTIF.sys && typeof Notification !== "undefined" && Notification.permission === "granted") {
-    try { new Notification(title, { body, tag: "crucible-" + st.cfg.key + "-" + side, renotify: false }); }
-    catch (e) {}
-  }
-  if (st.cfg.key !== active) { st.alert = true; paintTabs(); }
-}
-
-function toast(title, body, cls) {
-  const wrap = document.getElementById("toasts");
-  if (!wrap) return;
-  const el = document.createElement("div");
-  el.className = "toast " + (cls || "");
-  el.innerHTML = '<div class="tt">' + title + '</div><div class="tb">' + body + '</div>';
-  el.addEventListener("click", () => el.remove());
-  wrap.appendChild(el);
-  while (wrap.children.length > 4) wrap.firstChild.remove();
-  setTimeout(() => { el.classList.add("out"); setTimeout(() => el.remove(), 400); }, 9000);
-}
-
-function beep(freq) {
-  try {
-    if (!audioCtx) return;
-    const o = audioCtx.createOscillator(), g = audioCtx.createGain();
-    o.type = "sine"; o.frequency.value = freq;
-    g.gain.setValueAtTime(0.0001, audioCtx.currentTime);
-    g.gain.exponentialRampToValueAtTime(0.16, audioCtx.currentTime + 0.01);
-    g.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.28);
-    o.connect(g); g.connect(audioCtx.destination);
-    o.start(); o.stop(audioCtx.currentTime + 0.3);
-  } catch (e) {}
-}
-// Browsers only allow audio to start from a user gesture, so the toggle click
-// is what unlocks it.
-function unlockAudio() {
-  try {
-    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    if (audioCtx.state === "suspended") audioCtx.resume();
-  } catch (e) {}
-}
-
-async function toggleNotif() {
-  unlockAudio();
-  if (NOTIF.on) { NOTIF.on = false; notifSave(); paintNotifUi(); return; }
-  NOTIF.on = true;
-  if (typeof Notification !== "undefined") {
-    if (Notification.permission === "default") {
-      try { await Notification.requestPermission(); } catch (e) {}
-    }
-    NOTIF.sys = Notification.permission === "granted";
-  }
-  notifSave(); paintNotifUi();
-  toast("Cluster alerts on", NOTIF.sys
-    ? "You'll get a system notification when a nearest cluster shifts by " + NOTIF.minPct + "% or more."
-    : "In-page alerts only — this browser isn't granting system notifications.", "");
-}
-
-function paintNotifUi() {
-  const b = document.getElementById("notifbtn");
-  b.classList.toggle("on", NOTIF.on);
-  b.textContent = NOTIF.on ? "alerts on" : "alerts off";
-  const s = document.getElementById("soundbtn");
-  s.classList.toggle("on", NOTIF.sound);
-  s.textContent = NOTIF.sound ? "sound on" : "sound off";
-  const hint = document.getElementById("notifhint");
-  if (!NOTIF.on) { hint.textContent = ""; return; }
-  const iOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
-  const standalone = window.navigator.standalone === true ||
-    (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches);
-  if (typeof Notification === "undefined" || Notification.permission !== "granted") {
-    hint.innerHTML = iOS && !standalone
-      ? 'In-page alerts only. iPhone Safari blocks system notifications for ordinary tabs — ' +
-        'use Share → Add to Home Screen and open it from there to get real ones.'
-      : 'In-page alerts only — system notifications are blocked or not permitted.';
-    hint.style.color = "var(--warn)";
-  } else {
-    hint.textContent = "System notifications enabled. Alerts stay silent while a slider is being changed.";
-    hint.style.color = "var(--dim)";
-  }
 }
 
 /* ---------- tabs ---------------------------------------------------------- */
@@ -1646,7 +1483,6 @@ function recompute(st, silent) {
   const keep = st.candles.slice(-Math.ceil((st.lookbackDays * 1440) / 15));
   st.levels = buildLevels(keep, { levTiers: st.tiers.map(t => ({ lev: t.lev, w: t.w })),
     mmr: st.mmr, longShare: st.longShare, oiBase });
-  checkMagnets(st, !!silent);
   if (st.cfg.key === active) { paintMagnets(); drawOverlay(); paintOiLine(); }
 }
 function paintOiLine() {
@@ -1825,15 +1661,6 @@ function buildControls() {
     e.target.textContent = st.log.includeRec ? "showing estimated" : "observed only";
     paintLog();
   });
-  document.getElementById("notifbtn").addEventListener("click", toggleNotif);
-  document.getElementById("soundbtn").addEventListener("click", () => {
-    unlockAudio(); NOTIF.sound = !NOTIF.sound; notifSave(); paintNotifUi();
-    if (NOTIF.sound) beep(400);
-  });
-  document.getElementById("notifpct").addEventListener("change", e => {
-    NOTIF.minPct = Math.min(10, Math.max(0.05, +e.target.value || 0.4));
-    e.target.value = NOTIF.minPct; notifSave();
-  });
   document.getElementById("log-csv").addEventListener("click", exportCsv);
   document.getElementById("log-clear").addEventListener("click", () => {
     const st = cur();
@@ -1855,10 +1682,7 @@ async function boot() {
     st.minUsd = 0; st.paused = false;
     baselineLoad(st); logLoad(st);
   }
-  notifLoad();
   buildControls(); syncControls(); paintTabs(); paintRail();
-  document.getElementById("notifpct").value = NOTIF.minPct;
-  paintNotifUi();
   initChart();
   for (const s of SYMS) refreshScales(ST[s.key]);
   paintStats(); paintContext(); paintLog();
