@@ -373,8 +373,8 @@ input[type=number]{font-family:inherit;font-size:12px;background:var(--panel2);
 <div id="toasts"></div>
 
 <div class="foot">
-  Bybit, Binance, OKX and Bitget publish liquidation streams; this reads all four directly from the
-  browser, one connection each carrying all three symbols. Exchanges report bankruptcy price, not
+  Bybit, Binance, OKX, Bitget, Gate.io and HTX publish liquidation streams; this reads all six directly
+  from the browser, one connection each carrying all six symbols. Exchanges report bankruptcy price, not
   fill price, so notional is approximate. Every symbol keeps its own baseline, cascade log and
   model assumptions. The intensity baseline is stored in this browser and needs 30 minutes before it will score anything; it sharpens over about a day.
 </div>
@@ -392,8 +392,8 @@ input[type=number]{font-family:inherit;font-size:12px;background:var(--panel2);
    CRUCIBLE — cross-exchange perp liquidation monitor, BTC / ETH / SOL / XRP / BNB / DOGE
 
    One socket per exchange carries all six symbols; prints are routed to
-   per-symbol state on arrival. Nine sockets would be the naive shape and
-   would hit connection limits for nothing.
+   per-symbol state on arrival. 36 sockets (one per exchange x symbol)
+   would be the naive shape and would hit connection limits for nothing.
 
    SIDE CONVENTION — normalised to "which side of the book got wiped":
      "L" a LONG position was force-closed   "S" a SHORT was force-closed
@@ -404,11 +404,11 @@ input[type=number]{font-family:inherit;font-size:12px;background:var(--panel2);
 
 const SYMS = [
   { key: "BTC", bybit: "BTCUSDT", binance: "btcusdt", okx: "BTC-USDT-SWAP",
-    bitget: "BTCUSDT", ctVal: 0.01, dp: 1, mmr: 0.005 },
+    bitget: "BTCUSDT", gate: "BTC_USDT", htx: "BTC-USDT", ctVal: 0.01, dp: 1, mmr: 0.005 },
   { key: "ETH", bybit: "ETHUSDT", binance: "ethusdt", okx: "ETH-USDT-SWAP",
-    bitget: "ETHUSDT", ctVal: 0.1, dp: 2, mmr: 0.0075 },
+    bitget: "ETHUSDT", gate: "ETH_USDT", htx: "ETH-USDT", ctVal: 0.1, dp: 2, mmr: 0.0075 },
   { key: "SOL", bybit: "SOLUSDT", binance: "solusdt", okx: "SOL-USDT-SWAP",
-    bitget: "SOLUSDT", ctVal: 1, dp: 3, mmr: 0.01 },
+    bitget: "SOLUSDT", gate: "SOL_USDT", htx: "SOL-USDT", ctVal: 1, dp: 3, mmr: 0.01 },
   /* ctVal below is a fallback only (overwritten live from OKX, see
      loadCtVal) — dp/decimals match the tick sizes already used for these
      three on ATLAS/GoldenRatio/BTCLiveBoard. mmr is a best-effort estimate,
@@ -416,16 +416,17 @@ const SYMS = [
      publishes it) — these three are large-cap majors with deep liquidity,
      so they sit at SOL's/ETH's existing tier. */
   { key: "XRP", bybit: "XRPUSDT", binance: "xrpusdt", okx: "XRP-USDT-SWAP",
-    bitget: "XRPUSDT", ctVal: 100, dp: 4, mmr: 0.01 },
+    bitget: "XRPUSDT", gate: "XRP_USDT", htx: "XRP-USDT", ctVal: 100, dp: 4, mmr: 0.01 },
   { key: "BNB", bybit: "BNBUSDT", binance: "bnbusdt", okx: "BNB-USDT-SWAP",
-    bitget: "BNBUSDT", ctVal: 0.01, dp: 2, mmr: 0.0075 },
+    bitget: "BNBUSDT", gate: "BNB_USDT", htx: "BNB-USDT", ctVal: 0.01, dp: 2, mmr: 0.0075 },
   { key: "DOGE", bybit: "DOGEUSDT", binance: "dogeusdt", okx: "DOGE-USDT-SWAP",
-    bitget: "DOGEUSDT", ctVal: 1000, dp: 5, mmr: 0.01 },
+    bitget: "DOGEUSDT", gate: "DOGE_USDT", htx: "DOGE-USDT", ctVal: 1000, dp: 5, mmr: 0.01 },
 ];
-const BY = { bybit: {}, binance: {}, okx: {}, bitget: {} };
+const BY = { bybit: {}, binance: {}, okx: {}, bitget: {}, gate: {}, htx: {} };
 for (const s of SYMS) {
   BY.bybit[s.bybit] = s.key; BY.binance[s.bybit] = s.key;
   BY.okx[s.okx] = s.key; BY.bitget[s.bitget] = s.key;
+  BY.gate[s.gate] = s.key; BY.htx[s.htx] = s.key;
 }
 
 /* ---------- liquidation level model (verified in node) ------------------ */
@@ -493,6 +494,7 @@ function newState(cfg) {
   return {
     cfg, events: [], biggest: null, price: 0, candles: [], m1: [], kc: [],
     levels: null, oi: {}, oiHist: [], fund: {}, ctVal: cfg.ctVal, bybitOiLive: false,
+    gateMult: 1,   // fallback only — overwritten live from Gate.io, see loadGateMult
     base: { done: [], curMin: -1, curL: 0, curS: 0,
       secL: new Float64Array(60), secS: new Float64Array(60), secAt: new Float64Array(60) },
     log: { events: [], threshold: 99, armed: true, includeRec: false },
@@ -854,6 +856,66 @@ const EX = {
       return out;
     },
   },
+  gate: {
+    label: "Gate.io", url: "wss://fx-ws.gateio.ws/v4/ws/usdt",
+    sub: () => JSON.stringify({ time: Math.floor(Date.now() / 1000),
+      channel: "futures.public_liquidates", event: "subscribe", payload: ["!all"] }),
+    // No confirmed app-level ping protocol for this channel — left null
+    // rather than guessing one that could get the message rejected. The
+    // silent-connection watchdog below already covers this case with its
+    // no-ping fallback window, same as Binance.
+    ping: null, pingMs: 0,
+    parse(m) {
+      if (!m || m.channel !== "futures.public_liquidates" || m.event !== "update" || !Array.isArray(m.result)) return [];
+      const out = [];
+      for (const d of m.result) {
+        const sym = BY.gate[d.contract];
+        if (!sym) continue;
+        // size is signed CONTRACTS, not base currency: negative = short
+        // liquidated, positive = long. gateMult converts to base units —
+        // see loadGateMult, fetched live per symbol; falls back to 1
+        // (treat contracts as base units) if that fetch hasn't landed yet.
+        const raw = +d.size, price = +d.price;
+        if (!isFinite(raw) || !raw || !isFinite(price) || !price) continue;
+        const mult = ST[sym] ? ST[sym].gateMult : 1;
+        out.push({ sym, ts: +d.time_ms || (+d.time * 1000) || Date.now(), exch: "gate",
+          side: raw < 0 ? "S" : "L", qty: Math.abs(raw) * mult, price });
+      }
+      return out;
+    },
+  },
+  htx: {
+    label: "HTX", url: "wss://api.hbdm.com/linear-swap-notification",
+    // Wildcard topic covers every USDT-margined swap in one subscribe,
+    // same "subscribe once, filter client-side to our 6 symbols" shape as
+    // the other exchanges above.
+    sub: () => JSON.stringify({ op: "sub", cid: "crucible-" + Date.now(), topic: "public.*.liquidation_orders" }),
+    // No confirmed ping requirement for this public topic — see the same
+    // note on Gate.io above; relying on the silent-connection watchdog.
+    ping: null, pingMs: 0,
+    parse(m) {
+      if (!m || m.op !== "notify" || !m.topic || m.topic.indexOf("liquidation_orders") < 0 || !Array.isArray(m.data)) return [];
+      const out = [];
+      for (const d of m.data) {
+        const sym = BY.htx[d.contract_code];
+        if (!sym) continue;
+        // direction is the side of the liquidation ORDER itself: "sell"
+        // closes a long (a long got liquidated), "buy" closes a short —
+        // same convention as Binance's order-side field below.
+        const side = d.direction === "sell" ? "L" : d.direction === "buy" ? "S" : null;
+        if (!side) continue;
+        // trade_turnover is quote-currency (USDT) notional; dividing by
+        // price gives base-currency qty regardless of whether volume/amount
+        // are denominated in contracts or base units in this response —
+        // turnover/price is unambiguous either way.
+        const turnover = +d.trade_turnover, price = +d.price;
+        if (!isFinite(turnover) || !turnover || !isFinite(price) || !price) continue;
+        out.push({ sym, ts: +d.created_at || Date.now(), exch: "htx", side,
+          qty: turnover / price, price });
+      }
+      return out;
+    },
+  },
 };
 
 /* ---------- sockets ------------------------------------------------------ */
@@ -1043,6 +1105,12 @@ async function loadCtVal(st) {
   try {
     const j = await jget("https://www.okx.com/api/v5/public/instruments?instType=SWAP&instId=" + st.cfg.okx);
     const v = +j.data[0].ctVal; if (v > 0) st.ctVal = v;
+  } catch (e) {}
+}
+async function loadGateMult(st) {
+  try {
+    const j = await jget("https://api.gateio.ws/api/v4/futures/usdt/contracts/" + st.cfg.gate);
+    const v = +j.quanto_multiplier; if (v > 0) st.gateMult = v;
   } catch (e) {}
 }
 async function loadFunding(st) {
@@ -1779,7 +1847,11 @@ function buildControls() {
 async function boot() {
   for (const s of SYMS) {
     const st = ST[s.key];
-    st.show = { bybit: 1, binance: 1, okx: 1, bitget: 1, L: 1, S: 1 };
+    // Derived from EX's own keys rather than hardcoded, so a new exchange
+    // added to EX starts visible by default instead of silently hidden
+    // (the filter chip is built from Object.keys(EX) too — see buildControls).
+    st.show = Object.fromEntries(Object.keys(EX).map(k => [k, 1]));
+    st.show.L = 1; st.show.S = 1;
     st.minUsd = 0; st.paused = false;
     baselineLoad(st); logLoad(st);
   }
@@ -1797,6 +1869,7 @@ async function boot() {
   for (const s of SYMS) {
     const st = ST[s.key];
     loadCtVal(st);
+    loadGateMult(st);
     loadCandles(st).then(() => { if (s.key === active) pushCandles(); }).catch(() => {
       if (s.key === active) document.getElementById("chartmeta").innerHTML =
         '<span style="color:var(--warn)">candles blocked — check network or region</span>';
