@@ -16,6 +16,7 @@
   --short-dim:rgba(34,211,165,.20);
   --model:#f0b429;       /* anything estimated rather than observed */
   --live:#22d3a5; --dead:#3d4757; --warn:#f0b429;
+  --trend-glow: rgba(240,185,41,0.04);  /* BTC's own live trend, not any liquidation side */
   --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
 }
 *{box-sizing:border-box;margin:0;padding:0}
@@ -31,8 +32,9 @@ body{padding:10px 10px calc(10px + env(safe-area-inset-bottom));max-width:1500px
 .wash{
   position:fixed;inset:0;z-index:-1;pointer-events:none;
   background:
-    radial-gradient(ellipse 130% 80% at 50% -10%, rgba(255,81,69,0.08), transparent 60%),
-    radial-gradient(ellipse 120% 70% at 50% 110%, rgba(34,211,165,0.08), transparent 62%);
+    radial-gradient(ellipse 130% 80% at 50% -10%, var(--trend-glow), transparent 60%),
+    radial-gradient(ellipse 120% 70% at 50% 110%, var(--trend-glow), transparent 62%);
+  transition:background 1.4s ease;
 }
 .scanlines{
   position:fixed;inset:0;z-index:-1;pointer-events:none;opacity:0.5;
@@ -928,6 +930,53 @@ async function loadCandles(st) {
   })).sort((a, b) => a.t - b.t);
   if (st.candles.length && !st.price) st.price = st.candles[st.candles.length - 1].c;
 }
+/* ---------------- background wash: BTC's own live trend ----------------
+   Fetches BTC 1H candles on its own schedule, independent of whichever
+   symbol tab is active, so the aurora always reflects BTC — direction
+   from price vs EMA200, intensity from how many ATRs price has stretched
+   away from it (saturates at 4 ATRs). */
+function ema(values, period) {
+  const out = new Array(values.length).fill(NaN);
+  if (values.length < period) return out;
+  const k = 2 / (period + 1);
+  let sum = 0;
+  for (let i = 0; i < period; i++) sum += values[i];
+  out[period - 1] = sum / period;
+  for (let i = period; i < values.length; i++) out[i] = values[i] * k + out[i - 1] * (1 - k);
+  return out;
+}
+function atr14(candles) {
+  const out = new Array(candles.length).fill(NaN);
+  const tr = candles.map((c, i) => i === 0 ? c.h - c.l
+    : Math.max(c.h - c.l, Math.abs(c.h - candles[i - 1].c), Math.abs(c.l - candles[i - 1].c)));
+  if (tr.length < 14) return out;
+  let sum = 0;
+  for (let i = 0; i < 14; i++) sum += tr[i];
+  out[13] = sum / 14;
+  for (let i = 14; i < tr.length; i++) out[i] = (out[i - 1] * 13 + tr[i]) / 14;
+  return out;
+}
+async function refreshTrendGlow() {
+  try {
+    const j = await jget("https://api.bybit.com/v5/market/kline?category=linear&symbol=BTCUSDT&interval=60&limit=250");
+    const k = ((j.result && j.result.list) || []).map(r => ({
+      t: Math.floor(+r[0] / 1000), h: +r[2], l: +r[3], c: +r[4],
+    })).sort((a, b) => a.t - b.t);
+    if (k.length < 210) return;
+    const closes = k.map(c => c.c);
+    const i = k.length - 1;
+    const emaNow = ema(closes, 200)[i];
+    const atrNow = atr14(k)[i];
+    if (!isFinite(emaNow) || !isFinite(atrNow) || atrNow <= 0) return;
+    const price = closes[i];
+    const dir = price >= emaNow ? 1 : -1;
+    const strength = Math.max(0, Math.min(1, Math.abs(price - emaNow) / (atrNow * 4)));
+    const rgb = dir === 1 ? '53,255,176' : '255,77,106';
+    const alpha = (0.03 + strength * 0.15).toFixed(3);
+    document.documentElement.style.setProperty('--trend-glow', `rgba(${rgb},${alpha})`);
+  } catch (e) { /* keep whatever glow was already showing */ }
+}
+
 async function loadM1(st) {
   const j = await jget("https://api.bybit.com/v5/market/kline?category=linear&symbol=" +
     st.cfg.bybit + "&interval=1&limit=1000");
@@ -1725,6 +1774,9 @@ async function boot() {
     if (document.visibilityState === "visible") { for (const s of SYMS) recoverGap(ST[s.key]); }
     else heartbeat();
   });
+
+  refreshTrendGlow();
+  setInterval(refreshTrendGlow, 60000);
 }
 if (typeof document !== "undefined") boot();
 </script>
