@@ -6,18 +6,25 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>CRUCIBLE — BTC / ETH / SOL / XRP / BNB / DOGE liquidations</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700;800&display=swap" rel="stylesheet">
 <style>
+/* Palette + typography matched to BTCLiveBoard ("the first page") so all 4
+   apps in this family read as one system. --long/--short/--model/--live/
+   --dead/--warn are this page's own liquidation-side and status semantics
+   (no equivalent slot on the reference page) and stay as they were. */
 :root{
-  --bg:#080b11; --panel:#0f141d; --panel2:#141b26; --line:#1d2734;
-  --dim:#6d7c90; --mid:#9aa8bb; --bright:#e8eff8;
+  --bg:#070a09; --panel:#0e1412; --panel2:#121a17; --line:#1b2320;
+  --dim:#4a5852; --mid:#7c8f87; --bright:#eef4f0;
   --long:#ff5145;        /* longs being liquidated */
   --short:#22d3a5;       /* shorts being liquidated */
   --long-dim:rgba(255,81,69,.20);
   --short-dim:rgba(34,211,165,.20);
   --model:#f0b429;       /* anything estimated rather than observed */
   --live:#22d3a5; --dead:#3d4757; --warn:#f0b429;
-  --trend-glow: rgba(240,185,41,0.04);  /* BTC's own live trend, not any liquidation side */
-  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  --trend-glow: rgba(255,200,87,0.04);  /* BTC's own live trend, not any liquidation side */
+  --mono:'JetBrains Mono','SF Mono',Consolas,monospace;
 }
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{background:var(--bg);color:var(--bright);font-family:var(--mono);
@@ -1044,13 +1051,13 @@ let chart, series, overlay, ctx;
 function initChart() {
   const el = document.getElementById("chart");
   chart = LightweightCharts.createChart(el, {
-    layout: { background: { color: "transparent" }, textColor: "#6d7c90", fontSize: 10,
-      fontFamily: "ui-monospace, Menlo, monospace" },
-    grid: { vertLines: { color: "#141b26" }, horzLines: { color: "#141b26" } },
-    rightPriceScale: { borderColor: "#1d2734", scaleMargins: { top: .08, bottom: .08 } },
-    timeScale: { borderColor: "#1d2734", timeVisible: true, secondsVisible: false, rightOffset: 26 },
-    crosshair: { mode: 0, vertLine: { color: "#3d4757", width: 1, style: 2, labelBackgroundColor: "#1d2734" },
-      horzLine: { color: "#3d4757", width: 1, style: 2, labelBackgroundColor: "#1d2734" } },
+    layout: { background: { color: "transparent" }, textColor: "#4a5852", fontSize: 10,
+      fontFamily: "'JetBrains Mono', ui-monospace, Menlo, monospace" },
+    grid: { vertLines: { color: "#121a17" }, horzLines: { color: "#121a17" } },
+    rightPriceScale: { borderColor: "#1b2320", scaleMargins: { top: .08, bottom: .08 } },
+    timeScale: { borderColor: "#1b2320", timeVisible: true, secondsVisible: false, rightOffset: 26 },
+    crosshair: { mode: 0, vertLine: { color: "#3d4757", width: 1, style: 2, labelBackgroundColor: "#1b2320" },
+      horzLine: { color: "#3d4757", width: 1, style: 2, labelBackgroundColor: "#1b2320" } },
   });
   series = chart.addCandlestickSeries({ upColor: "#22d3a5", downColor: "#ff5145",
     borderVisible: false, wickUpColor: "#1a9e7c", wickDownColor: "#c23a31" });
